@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Airline Explorer Pro</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --fr-bg: #121417;
+            --fr-panel: rgba(20, 22, 26, 0.98);
+            --fr-accent: #fccb00;
+            --fr-text: #e0e0e0;
+            --fr-border: #333;
+        }
+
+        body, html {
+            margin: 0; padding: 0; height: 100%;
+            font-family: 'Roboto', sans-serif;
+            background: var(--fr-bg); color: var(--fr-text);
+            overflow: hidden;
+        }
+
+        #map { height: 100vh; width: 100vw; z-index: 1; background: #0b0c0d; }
+
+        /* 検索バー */
+        #search-box {
+            position: absolute; top: 20px; left: 20px; z-index: 1000;
+            display: flex; background: var(--fr-bg);
+            border-radius: 4px; border: 1px solid var(--fr-border);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+
+        #country-input {
+            background: #1d1f23; border: none; color: white; padding: 12px 15px;
+            width: 250px; outline: none; font-size: 15px;
+        }
+
+        #search-btn {
+            background: var(--fr-accent); border: none; padding: 0 20px;
+            cursor: pointer; font-weight: bold; color: #000;
+        }
+
+        /* サイドパネル */
+        #side-panel {
+            position: absolute; right: -400px; top: 0; width: 360px; height: 100%;
+            background: var(--fr-panel); z-index: 1001; transition: 0.4s cubic-bezier(0.19, 1, 0.22, 1);
+            border-left: 1px solid var(--fr-border);
+            display: flex; flex-direction: column;
+        }
+
+        #side-panel.active { right: 0; }
+
+        .panel-header {
+            background: #1a1c21; padding: 30px 20px;
+            border-bottom: 4px solid var(--fr-accent);
+        }
+
+        .panel-header h1 { margin: 0; font-size: 24px; color: #fff; text-transform: uppercase; }
+        .panel-header p { margin: 5px 0 0; color: var(--fr-accent); font-size: 12px; font-weight: bold; }
+
+        .panel-content { padding: 20px; flex-grow: 1; overflow-y: auto; }
+
+        .airline-card {
+            background: #25282e; margin-bottom: 12px; padding: 18px;
+            border-radius: 4px; border-left: 4px solid var(--fr-accent);
+        }
+
+        .airline-name { font-weight: bold; font-size: 17px; color: #fff; display: block; }
+        .airline-desc { font-size: 11px; color: #888; margin-top: 4px; }
+
+        .wiki-btn-container { padding: 20px; background: #1a1c21; }
+
+        .btn-primary {
+            background: #333; color: #fff; text-align: center;
+            padding: 12px; border-radius: 4px; text-decoration: none;
+            display: block; font-weight: bold; border: 1px solid #444;
+        }
+        .btn-primary:hover { background: #444; border-color: var(--fr-accent); }
+
+        #close-panel {
+            position: absolute; left: -45px; top: 20px;
+            background: var(--fr-panel); border: 1px solid var(--fr-border);
+            color: white; width: 45px; height: 45px; cursor: pointer; border-radius: 4px 0 0 4px;
+        }
+
+        #loader {
+            display: none; position: absolute; top: 20px; right: 20px; z-index: 2000;
+            background: var(--fr-accent); color: #000; padding: 8px 15px;
+            font-size: 12px; font-weight: bold; border-radius: 20px;
+        }
+
+        /* 日本語ラベルのスタイル */
+        .country-label {
+            background: transparent !important; border: none !important; box-shadow: none !important;
+            color: rgba(255, 255, 255, 0.8); font-weight: bold; text-shadow: 0 0 4px #000;
+            font-size: 11px; white-space: nowrap; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loader">SEARCHING...</div>
+
+    <div id="search-box">
+        <input type="text" id="country-input" placeholder="国名または首都..." list="countries-datalist">
+        <datalist id="countries-datalist"></datalist>
+        <button id="search-btn">検索</button>
+    </div>
+
+    <div id="side-panel">
+        <button id="close-panel">✕</button>
+        <div class="panel-header">
+            <p id="label-capital">CAPITAL CITY</p>
+            <h1 id="panel-country-name">COUNTRY</h1>
+        </div>
+        <div class="panel-content">
+            <h3 style="color: #888; font-size: 11px; text-transform: uppercase; margin-bottom: 15px;">有名航空会社 (TOP 3)</h3>
+            <div id="airline-results"></div>
+        </div>
+        <div class="wiki-btn-container">
+            <a id="wiki-external-link" href="#" target="_blank" class="btn-primary">WIKIPEDIA LIST</a>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map', { zoomControl: false, minZoom: 2 }).setView([20, 0], 2);
+        
+        // 道路なしの純粋ダークベース
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; CARTO'
+        }).addTo(map);
+
+        const priorityKeywords = ["航空", "Air", "Lines", "Airways", "International"];
+        let geojsonLayer;
+
+        // --- 修正の要：国情報の取得ロジック ---
+        async function fetchCountryInfo(query, isCoord = false, lat, lon) {
+            document.getElementById('loader').style.display = 'block';
+            let url = isCoord 
+                ? `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=ja`
+                : `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&accept-language=ja&limit=1`;
+
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                const result = Array.isArray(data) ? data[0] : data;
+
+                if (result && result.address && result.address.country) {
+                    const country = result.address.country;
+                    const capital = result.address.city || result.address.town || result.address.state || "不明";
+                    
+                    // 航空会社取得
+                    const airlineData = await getAirlinesFromWiki(country);
+                    updateUI(country, capital, airlineData);
+                    
+                    if(!isCoord) map.flyTo([result.lat, result.lon], 4);
+                }
+            } catch (e) { console.error(e); }
+            document.getElementById('loader').style.display = 'none';
+        }
+
+        // --- Wikipedia検索 (中国・北朝鮮対応) ---
+        async function getAirlinesFromWiki(country) {
+            let categoryName = country;
+            // 指定の例外処理
+            if (country.match(/中国|中華人民共和国/)) categoryName = "中華人民共和国";
+            else if (country.match(/北朝鮮|朝鮮民主主義人民共和国/)) categoryName = "朝鮮民主主義人民共和国";
+            else if (country.match(/アメリカ/)) categoryName = "アメリカ合衆国";
+
+            const wikiCategory = `Category:${categoryName}の航空会社`;
+            const apiUrl = `https://ja.wikipedia.org/w/api.php?origin=*&action=query&list=categorymembers&cmtitle=${encodeURIComponent(wikiCategory)}&cmlimit=50&format=json`;
+
+            try {
+                const response = await fetch(apiUrl);
+                const data = await response.json();
+                if (!data.query || !data.query.categorymembers) return { airlines: [], url: `https://ja.wikipedia.org/wiki/${encodeURIComponent(country)}` };
+
+                let list = data.query.categorymembers
+                    .map(m => m.title)
+                    .filter(t => !t.includes("Category:") && !t.includes("Template:") && !t.includes("一覧"));
+
+                // 有名な3社を抽出
+                list.sort((a, b) => {
+                    let scoreA = priorityKeywords.some(k => a.includes(k)) ? 1 : 0;
+                    let scoreB = priorityKeywords.some(k => b.includes(k)) ? 1 : 0;
+                    return scoreB - scoreA || a.length - b.length;
+                });
+
+                return {
+                    airlines: list.slice(0, 3),
+                    url: `https://ja.wikipedia.org/wiki/${encodeURIComponent(wikiCategory)}`
+                };
+            } catch (e) { return null; }
+        }
+
+        function updateUI(country, capital, data) {
+            document.getElementById('panel-country-name').textContent = country.toUpperCase();
+            document.getElementById('label-capital').textContent = `CAPITAL: ${capital.toUpperCase()}`;
+            const container = document.getElementById('airline-results');
+            container.innerHTML = '';
+
+            if (data && data.airlines.length > 0) {
+                data.airlines.forEach(name => {
+                    const div = document.createElement('div');
+                    div.className = 'airline-card';
+                    div.innerHTML = `<span class="airline-name">${name}</span><span class="airline-desc">Active Carrier</span>`;
+                    container.appendChild(div);
+                });
+                document.getElementById('wiki-external-link').href = data.url;
+            } else {
+                container.innerHTML = '<p style="color:#666;">No major airline data found.</p>';
+            }
+            document.getElementById('side-panel').classList.add('active');
+        }
+
+        // --- マップデータの構築 (日本語名とくっきり境界) ---
+        async function initMap() {
+            const res = await fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson');
+            const data = await res.json();
+            
+            geojsonLayer = L.geoJSON(data, {
+                style: { color: '#fccb00', weight: 0.5, fillColor: '#1a1c21', fillOpacity: 0.4 },
+                onEachFeature: (feature, layer) => {
+                    // ここで各国のクリックイベントを個別にバインド
+                    layer.on('click', (e) => {
+                        L.DomEvent.stopPropagation(e);
+                        fetchCountryInfo(null, true, e.latlng.lat, e.latlng.lng);
+                    });
+                    
+                    // ホバー効果
+                    layer.on('mouseover', () => layer.setStyle({ fillOpacity: 0.8, weight: 2 }));
+                    layer.on('mouseout', () => layer.setStyle({ fillOpacity: 0.4, weight: 0.5 }));
+                }
+            }).addTo(map);
+        }
+
+        // --- イベント ---
+        document.getElementById('search-btn').onclick = () => fetchCountryInfo(document.getElementById('country-input').value);
+        document.getElementById('country-input').onkeypress = (e) => { if(e.key === 'Enter') fetchCountryInfo(e.target.value); };
+        document.getElementById('close-panel').onclick = () => document.getElementById('side-panel').classList.remove('active');
+
+        // 地図の何も無いところをクリックした時の挙動
+        map.on('click', (e) => fetchCountryInfo(null, true, e.latlng.lat, e.latlng.lng));
+
+        initMap();
+    </script>
+</body>
+</html>
